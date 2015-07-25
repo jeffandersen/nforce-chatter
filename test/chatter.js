@@ -1,124 +1,90 @@
-var nforce = require("nforce");
-var chatter = require('../')(nforce);
-var should = require("should");
-var config = require("./config");
+var _ = require('lodash');
+var sinon = require('sinon');
+var nforce = require('nforce');
+var assert = require('assert');
 
-var org = nforce.createConnection({
-  clientId: config.connection.clientId,
-  clientSecret: config.connection.clientSecret,
-  redirectUri: config.connection.redirectUri,
-  mode: 'single',
-  plugins: ['chatter']
-});
+var testCases = require('./cases');
 
-describe('plugin', function() {
+var chatter = require('../lib/chatter');
 
-  describe('#myNewsFeed()', function(){
-    it('should return my news feed successfully', function(done){
-      org.chatter.myNewsFeed(function(err, resp) {
-        if (err) console.log(err);
-        if (config.debug) console.log(resp);
-        resp.elements.should.be.instanceof(Array);
-        done();
-      });
-    })
-  })
+var FAKE_CLIENT_ID = 'client-id-is-fake';
+var FAKE_CLIENT_SECRET = 'not-a-real-secret';
+var FAKE_REDIRECT_URI = 'https://example.com';
+var FAKE_INSTANCE_URL = 'https://salesforce.com';
 
-  describe('#recordFeed()', function(){
-    if (config.records.recordFeedId) {
-      it('should return the requested record feed successfully', function(done){
-        org.chatter.recordFeed({id: config.records.recordFeedId}, function(err, resp) {
-          if (err) console.log(err);
-          if (config.debug) console.log(resp);
-          resp.elements.should.be.instanceof(Array);
-          done();
-        });
-      })
-    } else {
-      it('should not test successfully. Please enter the ID of a record ID into config.js')
-    }
-  })
+describe('chatter plugin', function() {
+  var org;
+  var sandbox = sinon.sandbox.create();
 
-  describe('#groupFeed()', function(){
-    if (config.records.groupFeedId) {
-      it('should return the requested group feed successfully', function(done){
-        org.chatter.groupFeed({id: config.records.groupFeedId}, function(err, resp) {
-          if (err) console.log(err);
-          if (config.debug) console.log(resp);
-          resp.elements.should.be.instanceof(Array);
-          done();
-        });
-      })
-    } else {
-      it('should not test successfully. Please enter the ID of a group ID into config.js')
-    }
-  })
+  before(function(done) {
+    require('../')(nforce);
 
-  describe('#userStatistics()', function(){
-    if (config.records.userId) {
-      it('should return the requested user statistics successfully', function(done){
-        org.chatter.userStatistics({id: config.records.userId}, function(err, resp) {
-          if (err) console.log(err);
-          if (config.debug) console.log(resp);
-          resp.id.should.be.instanceof(String);
-          done();
-        });
-      })
-    } else {
-      it('should not test successfully. Please enter the ID of a user ID into config.js')
-    }
-  })
-
-  describe('#postFeedItem()', function(){
-    if (config.records.recordFeedId) {
-      it('should post a new feed item successfully for a record', function(done){
-        org.chatter.postFeedItem({id: config.records.recordFeedId, text: 'My Awesome Post!!'}, function(err, resp) {
-          if (err) console.log(err);
-          if (config.debug) console.log(resp);
-          resp.body.should.be.instanceof(Object);
-          done();
-        });
-      })
-    } else {
-      it('should not test successfully. Please enter the ID of a record ID into config.js')
-    }
-  })
-
-  describe('#postComment()', function(){
-    if (config.records.feedElementId) {
-      it('should post a comment successfully', function(done){
-        org.chatter.postComment({id: config.records.feedElementId, text: 'My Awesome Comment!!!'}, function(err, resp) {
-          if (err) console.log(err);
-          if (config.debug) console.log(resp);
-          resp.body.should.be.instanceof(Object);
-          done();
-        });
-      })
-    } else {
-      it('should not test successfully. Please enter the ID of a feedElement into config.js')
-    }
-  })
-
-  describe('#likeFeedItem()', function(){
-    if (config.records.feedElementId) {
-      it('should like a feeditem successfully', function(done){
-        org.chatter.likeFeedItem({id: config.records.feedElementId}, function(err, resp) {
-          if (err) console.log(err);
-          if (config.debug) console.log(resp);
-          resp.id.should.be.instanceof(String);
-          done();
-        });
-      })
-    } else {
-      it('should not test successfully. Please enter the ID of a feedElement into config.js')
-    }
-  })
-
-  before(function(done){
-    org.authenticate({ username: config.connection.sfuser, password: config.connection.sfpass}, function(err, resp){
-      if (err) console.log('Error connecting to Salesforce: ' + err.message);
-      done();
+    // Instantiate nforce so we can test the plugin methods
+    org = nforce.createConnection({
+      clientId: FAKE_CLIENT_ID,
+      clientSecret: FAKE_CLIENT_SECRET,
+      redirectUri: FAKE_REDIRECT_URI,
+      mode: 'single',
+      plugins: ['chatter']
     });
+
+    // Fake oauth object, we won't actually make requests
+    org.oauth = { instance_url: FAKE_INSTANCE_URL };
+    done();
   });
 
+  /**
+   * Stub out _request so we don't actually perform the http request
+   */
+  beforeEach(function() {
+    sandbox.stub(chatter, '_request').yields();
+  });
+  afterEach(function() {
+    sandbox.restore();
+  });
+
+  /**
+   * Generate test cases for each route
+   */
+  var functions = _.keys(testCases);
+  functions.forEach(function(fnName) {
+    describe('#' + fnName, function() {
+      testCases[fnName].forEach(function(test) {
+        var method = test.expectedMethod;
+        var path = test.expectedPath;
+
+        // Test sad path scenario of missing arguments
+        if (test.expectedThrow) {
+          it('throws an error: ' + test.expectedThrow, function(done) {
+            try {
+              org.chatter[fnName](test.args, error);
+              function error() { done(new Error('Did not throw')); }
+            } catch(err) {
+              assert.equal(err.message, test.expectedThrow);
+              done();
+            }
+          });
+          return;
+        }
+        
+        // Verifies that the right method/args/path are used
+        it('performs a ' + method + ' on ' + path, function(done) {
+          org.chatter[fnName](test.args, function() {
+            sinon.assert.calledOnce(chatter._request);
+            var args = chatter._request.args[0][0];
+            var cb = chatter._request.args[0][1];
+
+            assert.equal(args.method, method, 'expected method matches');
+            assert.equal(typeof cb, 'function', 'callback is a function');
+            assert.equal(args.uri, FAKE_INSTANCE_URL + path, 'expected path matches');
+            if (test.expectedBody) {
+              assert.deepEqual(JSON.stringify(test.expectedBody), args.body, 'expected body matches');
+            }
+
+            done();
+          });
+        });
+      });
+    });
+  });
 });
